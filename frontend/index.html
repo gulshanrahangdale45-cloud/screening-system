@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identity Screening Platform</title>
+<style>
+:root{--bg:#0f172a;--panel:#1e293b;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--text)}
+a{color:var(--accent)}
+header nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--panel);padding:12px 20px;border-bottom:1px solid var(--line)}
+header nav a{color:var(--muted);text-decoration:none;padding:7px 11px;border-radius:8px}
+header nav a.on,header nav a:hover{background:var(--line);color:var(--text)}
+.brand{color:var(--accent);margin-right:14px;font-weight:600}
+.grow{flex:1}
+main{padding:24px;max-width:1100px;margin:auto}
+h2{margin:0 0 16px}h3,h4{margin:12px 0 8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px}
+.panel{background:var(--bg);border:1px dashed var(--line);border-radius:10px;padding:12px;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
+.stat b{display:block;font-size:26px;margin-top:6px}
+.muted{color:var(--muted);font-size:13px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+form{display:grid;gap:12px}
+label{display:grid;gap:6px;font-size:13px;color:var(--muted)}
+label.chk{display:flex;gap:8px;align-items:center;color:var(--text)}
+input,select,textarea{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit}
+button{background:var(--accent);color:#0f172a;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:wait}
+.row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}.row>label{flex:1;min-width:180px}
+.sp{justify-content:space-between;align-items:center}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);vertical-align:top}
+.badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:12px;font-weight:600;background:var(--line)}
+.LOW{background:#14532d}.MEDIUM{background:#713f12}.HIGH{background:#7f1d1d}.CRITICAL{background:#581c87}
+.chip{display:inline-block;background:var(--line);border-radius:6px;padding:3px 8px;margin:2px;font-size:12px}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+pre{background:var(--bg);padding:10px;border-radius:8px;font-size:12px;color:var(--muted);overflow:auto;margin:6px 0}
+code{font-size:12px;color:var(--muted);word-break:break-all}
+.disclaimer{font-size:12px;color:var(--muted);border-left:3px solid var(--warn);padding:8px 12px;margin-top:14px}
+.toast{position:fixed;bottom:20px;right:20px;background:var(--panel);border:1px solid var(--line);padding:12px 16px;border-radius:10px;max-width:360px;z-index:9}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main id="app"></main>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pretty = s => esc(String(s ?? '').replace(/_/g, ' ').toLowerCase());
+const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const tok = () => sessionStorage.getItem('tok');
+const role = () => sessionStorage.getItem('role') || '';
+const can = (...roles) => roles.includes(role());
+const cls = v => /INVALID|FAILED|NO_MATCH|REVIEW|FLAGGED|MISMATCH|ERROR/.test(v) ? 'bad'
+  : /^(VALID|MATCH|CLEAR|SUCCESS|NO_ANOMALY|CORROBORATED.*)$/.test(v) ? 'ok' : 'muted';
+const chips = a => (a || []).map(x => `<span class="chip">${esc(x)}</span>`).join('');
+const stat = (l, v) => `<div class="card stat"><span class="muted">${l}</span><b>${esc(v)}</b></div>`;
+
+function toast(msg, bad) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  if (bad) t.style.borderColor = 'var(--bad)';
+  t.textContent = msg;
+  $('#toast').replaceChildren(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+async function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (tok()) headers.Authorization = 'Bearer ' + tok();
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401 && !path.includes('/auth/login')) {
+    sessionStorage.clear();
+    throw new Error('Session expired');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(typeof data.detail === 'string' ? data.detail
+      : Array.isArray(data.detail) ? data.detail.map(d => d.msg).join('; ')
+      : `Request failed (${res.status})`);
+  }
+  return data;
+}
+
+function logout() { sessionStorage.clear(); location.hash = ''; route(); }
+
+// ---------- sign in ----------
+function loginView(msg) {
+  $('#top').innerHTML = '';
+  $('#app').innerHTML = `
+    <div class="card" style="max-width:360px;margin:60px auto">
+      <h2>Sign in</h2>
+      <form id="lf">
+        <label>Username<input name="username" required autocomplete="username"></label>
+        <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+        <div><button>Sign in</button></div>
+      </form>
+      <p class="muted">${esc(msg || '')}</p>
+    </div>`;
+  $('#lf').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const r = await api('/api/auth/login', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
+      sessionStorage.setItem('tok', r.access_token);
+      sessionStorage.setItem('role', r.role);
+      location.hash = '#/dashboard';
+      route();
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
+// ---------- dashboard ----------
+async function dashboard() {
+  const list = await api('/api/screenings?limit=500');
+  const n = a => list.filter(s => s.recommended_action === a).length;
+  let ledgerMsg = 'Visible to auditors and administrators only';
+  if (can('ADMIN', 'AUDITOR')) ledgerMsg = (await api('/api/ledger/verify')).message;
+  $('#app').innerHTML = `
+    <h2>Dashboard</h2>
+    <div class="grid">
+      ${stat('Screenings', list.length)}${stat('Priority review', n('PRIORITY_REVIEW'))}
+      ${stat('Standard review', n('STANDARD_REVIEW'))}${stat('Light review', n('LIGHT_REVIEW'))}
+    </div>
+    <div class="card" style="margin-top:18px"><b>Blockchain ledger:</b> <span class="muted">${esc(ledgerMsg)}</span></div>
+    <p class="disclaimer">Screening outputs are indicators for authorised human review. They do not establish identity or eligibility.</p>`;
+}
+
+// ---------- new screening ----------
+function screenForm() {
+  $('#app').innerHTML = `
+    <h2>New screening</h2>
+    <div class="card"><form id="f">
+      <div class="row">
+        <label>Document type
+          <select name="doc_type">
+            <option value="aadhaar">Aadhaar</option><option value="pan">PAN</option>
+            <option value="passport">Passport</option><option value="other">Other</option>
+          </select></label>
+        <label>Document number (recommended)
+          <input name="document_number" placeholder="A typed number is more reliable than OCR"></label>
+      </div>
+      <label>Identity document (JPG, PNG or PDF, max 10 MB)
+        <input type="file" name="document" accept=".jpg,.jpeg,.png,.pdf" required></label>
+      <label>Live selfie (optional)
+        <input type="file" name="live_photo" accept=".jpg,.jpeg,.png"></label>
+      <div class="panel">
+        <label class="chk"><input type="checkbox" name="use_digilocker"> Cross-check with the DigiLocker issued record (issuer consensus)</label>
+        <label>DigiLocker access token (applicant consent via partner OAuth; not needed in sandbox mode)
+          <input name="digilocker_token" type="password" autocomplete="off"></label>
+      </div>
+      <div><button id="sub">Run screening</button></div>
+    </form></div>
+    <div id="result"></div>`;
+
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target, b = $('#sub');
+    const fd = new FormData(f);
+    fd.set('use_digilocker', f.use_digilocker.checked ? 'true' : 'false');
+    ['document_number', 'digilocker_token'].forEach(k => { if (!fd.get(k)) fd.delete(k); });
+    if (!fd.get('live_photo')?.name) fd.delete('live_photo');
+    b.disabled = true; b.textContent = 'Screening…';
+    try {
+      renderResult(await api('/api/screenings', { method: 'POST', body: fd }));
+      toast('Screening complete');
+    } catch (err) { toast(err.message, true); }
+    finally { b.disabled = false; b.textContent = 'Run screening'; }
+  };
+}
+
+function renderResult(r, target = '#result') {
+  const c = r.issuer_consensus;
+  const ccls = /MISMATCH/.test(c.status) ? 'bad' : /CORROBORATED/.test(c.status) ? 'ok' : 'warn';
+  $(target).innerHTML = `
+    <div class="card">
+      <div class="row sp">
+        <div><h3 style="margin:0">${esc(r.screening_id)}</h3><span class="muted">${esc(r.filename)} · ${esc(r.doc_type)}</span></div>
+        <span class="badge ${esc(r.risk.level)}">${esc(r.risk.level)} RISK</span>
+      </div>
+      <p>Recommended route: <b>${pretty(r.recommended_action)}</b></p>
+      <div class="bar"><i style="width:${r.risk.score}%"></i></div>
+      <p class="muted">Score ${r.risk.score}/100</p>
+      <p>${chips(r.risk.reason_codes) || '<span class="ok">No risk indicators raised</span>'}</p>
+      <div class="panel">
+        <h4>Issuer consensus (DigiLocker)</h4>
+        <p class="${ccls}"><b>${pretty(c.status)}</b></p>
+        <pre>${esc(JSON.stringify(c.checks, null, 2))}</pre>
+      </div>
+      <table>${Object.entries(r.checks).map(([k, v]) => `<tr><td>${pretty(k)}</td><td class="${cls(v)}">${esc(v)}</td></tr>`).join('')}</table>
+      ${r.officer_decision ? `<p>Officer decision: <b>${esc(r.officer_decision.decision)}</b> by ${esc(r.officer_decision.officer)}</p>` : ''}
+      <div class="row" style="margin-top:12px">
+        ${can('ADMIN', 'OFFICER') ? `
+          <button class="ghost" onclick="dl('${esc(r.screening_id)}','json')">Download JSON</button>
+          <button class="ghost" onclick="dl('${esc(r.screening_id)}','csv')">Download CSV</button>` : ''}
+        <a href="#/screening/${esc(r.screening_id)}">Open record →</a>
+      </div>
+      <div class="disclaimer">${esc(r.disclaimer)}</div>
+    </div>`;
+}
+
+async function dl(sid, fmt) {
+  try {
+    const res = await fetch(`/api/screenings/${encodeURIComponent(sid)}/report?format=${fmt}`,
+      { headers: { Authorization: 'Bearer ' + tok() } });
+    if (!res.ok) throw new Error('Download failed (' + res.status + ')');
+    const url = URL.createObjectURL(await res.blob());
+    Object.assign(document.createElement('a'), { href: url, download: `${sid}.${fmt}` }).click();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- screenings ----------
+async function screeningsView() {
+  const list = await api('/api/screenings?limit=200');
+  $('#app').innerHTML = `
+    <h2>Screenings</h2>
+    <div class="card"><table>
+      <tr><th>ID</th><th>Type</th><th>Risk</th><th>Issuer check</th><th>Route</th><th>Decision</th><th>Created</th></tr>
+      ${list.map(s => `
+        <tr>
+          <td><a href="#/screening/${esc(s.screening_id)}">${esc(s.screening_id)}</a></td>
+          <td>${esc(s.doc_type)}</td>
+          <td><span class="badge ${esc(s.risk_level)}">${esc(s.risk_level)}</span> ${esc(s.risk_score)}</td>
+          <td class="muted">${pretty(s.issuer_status)}</td>
+          <td>${pretty(s.recommended_action)}</td>
+          <td>${esc(s.decision)}</td>
+          <td class="muted">${esc(s.created_at.slice(0, 16).replace('T', ' '))}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">No screenings yet</td></tr>'}
+    </table></div>`;
+}
+
+async function detailView(sid) {
+  const r = await api('/api/screenings/' + encodeURIComponent(sid));
+  $('#app').innerHTML = '<div id="result"></div>';
+  renderResult(r);
+  if (can('OFFICER') && !r.officer_decision) {
+    $('#app').insertAdjacentHTML('beforeend', `
+      <div class="card"><h4>Officer decision</h4>
+        <form id="df">
+          <label>Decision<select name="decision"><option>CLEARED</option><option>ESCALATED</option><option>REJECTED</option></select></label>
+          <label>Remarks (only a hash is stored in the ledger)<textarea name="remarks" rows="2"></textarea></label>
+          <div><button>Record decision</button></div>
+        </form></div>`);
+    $('#df').onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api(`/api/screenings/${encodeURIComponent(sid)}/decision`,
+          json('POST', Object.fromEntries(new FormData(e.target))));
+        toast('Decision recorded');
+        detailView(sid);
+      } catch (err) { toast(err.message, true); }
+    };
+  }
+}
+
+// ---------- ledger ----------
+async function ledgerView() {
+  const [v, entries] = await Promise.all([api('/api/ledger/verify'), api('/api/ledger/entries?limit=50')]);
+  $('#app').innerHTML = `
+    <h2>Blockchain ledger</h2>
+    <div class="card">
+      <p class="${v.valid ? 'ok' : 'bad'}"><b>${esc(v.message)}</b></p>
+      <p class="muted">Blocks: ${esc(v.blocks ?? '—')} · Entries verified: ${esc(v.entries_checked ?? '—')} · Pending: ${esc(v.pending_entries ?? '—')}</p>
+      ${can('ADMIN') ? '<button id="seal">Seal pending entries</button>' : ''}
+    </div>
+    <div class="card"><table>
+      <tr><th>#</th><th>Block</th><th>Event</th><th>Subject</th><th>Entry hash</th><th>Time</th></tr>
+      ${entries.map(e => `
+        <tr><td>${e.id}</td><td>${esc(e.block_index ?? 'pending')}</td><td>${esc(e.event)}</td>
+        <td>${esc(e.subject)}</td><td><code>${esc(e.entry_hash.slice(0, 16))}…</code></td>
+        <td class="muted">${esc(e.created_at.slice(0, 16).replace('T', ' '))}</td></tr>`).join('')}
+    </table></div>`;
+  $('#seal')?.addEventListener('click', async () => {
+    try {
+      const r = await api('/api/ledger/seal', { method: 'POST' });
+      toast(r.message);
+      ledgerView();
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ---------- alerts ----------
+async function alertsView() {
+  const list = await api('/api/alerts');
+  $('#app').innerHTML = `
+    <h2>Alerts</h2>
+    <div class="card"><table>
+      <tr><th>Screening</th><th>Severity</th><th>Message</th><th>Status</th><th></th></tr>
+      ${list.map(a => `
+        <tr>
+          <td><a href="#/screening/${esc(a.screening_id)}">${esc(a.screening_id)}</a></td>
+          <td><span class="badge ${esc(a.severity)}">${esc(a.severity)}</span></td>
+          <td>${esc(a.message)}</td>
+          <td class="${a.status === 'OPEN' ? 'warn' : 'ok'}">${esc(a.status)}</td>
+          <td>${a.status === 'OPEN' && can('ADMIN', 'OFFICER')
+            ? `<button class="ghost" data-id="${a.alert_id}">Resolve</button>` : ''}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="muted">No alerts</td></tr>'}
+    </table></div>`;
+  document.querySelectorAll('[data-id]').forEach(b => b.onclick = async () => {
+    try {
+      await api(`/api/alerts/${b.dataset.id}/resolve`, { method: 'PATCH' });
+      alertsView();
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ---------- router ----------
+const NAV = [
+  ['dashboard', 'Dashboard', ['ADMIN', 'OFFICER', 'AUDITOR']],
+  ['screen', 'New screening', ['ADMIN', 'OFFICER']],
+  ['screenings', 'Screenings', ['ADMIN', 'OFFICER', 'AUDITOR']],
+  ['ledger', 'Ledger', ['ADMIN', 'AUDITOR']],
+  ['alerts', 'Alerts', ['ADMIN', 'OFFICER', 'AUDITOR']],
+];
+const PAGES = {
+  dashboard, screen: screenForm, screenings: screeningsView,
+  screening: detailView, ledger: ledgerView, alerts: alertsView,
+};
+
+async function route() {
+  if (!tok()) return loginView();
+  const [name, arg] = location.hash.slice(2).split('/');
+  const page = name || 'dashboard';
+  $('#top').innerHTML = `<nav>
+    <span class="brand">Identity Screening</span>
+    ${NAV.filter(([, , roles]) => can(...roles)).map(([k, label]) =>
+      `<a href="#/${k}" class="${page === k || (page === 'screening' && k === 'screenings') ? 'on' : ''}">${label}</a>`).join('')}
+    <span class="grow"></span><span class="muted">${esc(role())}</span>
+    <button class="ghost" onclick="logout()">Sign out</button></nav>`;
+  $('#app').innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    await (PAGES[page] || dashboard)(arg);
+  } catch (e) {
+    if (!tok()) return loginView('Your session expired. Please sign in again.');
+    $('#app').innerHTML = `<div class="card bad">${esc(e.message)}</div>`;
+  }
+}
+
+addEventListener('hashchange', route);
+route();
+</script>
+</body>
+</html>

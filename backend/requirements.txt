@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+gunicorn
+python-multipart
+sqlalchemy
+psycopg2-binary
+PyJWT
+cryptography
+httpx
+pytesseract
+Pillow
+opencv-python-headless
+numpy

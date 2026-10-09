@@ -1,0 +1,10 @@
+export JWT_SECRET=REPLACE_ME
+export FERNET_KEY=REPLACE_ME
+export LEDGER_SIGNING_KEY=REPLACE_ME
+export ADMIN_PASSWORD='Admin#Test-123'
+export OFFICER_PASSWORD='Officer#Test-123'
+export AUDITOR_PASSWORD='Auditor#Test-123'
+export DATABASE_URL=sqlite:////tmp/run/screening.db
+export UPLOAD_DIR=/tmp/run/uploads
+export LEDGER_SEAL_EVERY=5
+export DIGILOCKER_MODE=sandbox
